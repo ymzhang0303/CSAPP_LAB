@@ -1,0 +1,331 @@
+BombLab，通过disaseembly来解开炸弹，我习惯用solution.txt，这样可以避免运行已经解开的炸弹的时候要重复在命令行输入
+
+start
+gdb bomb
+set args solution.txt
+
+// phase_1
+disas phase_1
+   0x0000000000400ee0 <+0>:     sub    $0x8,%rsp
+   0x0000000000400ee4 <+4>:     mov    $0x402400,%esi
+   0x0000000000400ee9 <+9>:     callq  0x401338 <strings_not_equal>
+   0x0000000000400eee <+14>:    test   %eax,%eax
+   0x0000000000400ef0 <+16>:    je     0x400ef7 <phase_1+23>
+   0x0000000000400ef2 <+18>:    callq  0x40143a <explode_bomb>
+   0x0000000000400ef7 <+23>:    add    $0x8,%rsp
+   0x0000000000400efb <+27>:    retq   
+
+code分析：
+phase_1 的第一个参数存储在$rdi，
+第2行，赋值$0x402400给$esi；
+第3行，两个registers作为<strings_not_equal>的输入，判断$rdi和$esi是否相等;
+第4行，判断<strings_not_equal>的输出$eax是否为空，若$eax为0x0，则ZERO Flag置为1;
+第5行，若ZF为1,jump到<phase_1+23>;
+返回;
+
+只要$rdi也就是整个phase_1的输入等于$0x402400，则可以顺利retq;
+x/s 0x402400
+结果为
+"Border relations with Canada have never been better."
+
+//phase_2
+disas phase_2 
+（先只看<read_six_numbers>之前的部分）
+   0x0000000000400efc <+0>:     push   %rbp
+   0x0000000000400efd <+1>:     push   %rbx
+   0x0000000000400efe <+2>:     sub    $0x28,%rsp
+   0x0000000000400f02 <+6>:     mov    %rsp,%rsi
+   0x0000000000400f05 <+9>:     callq  0x40145c <read_six_numbers>
+   0x0000000000400f0a <+14>:    cmpl   $0x1,(%rsp)
+
+在理解<phase_2>的diaas code之前，我们先需要理解一下<read_six_numbers>做了什么（我就是因为一开始没理解这个卡了很久）;
+第4行，把栈第指针$rsp赋给$rsi，作为<read_six_numbers>的第2个参数，第1个参数是原本的$rdi;
+
+disas read_six_numbers
+   0x000000000040145c <+0>:     sub    $0x18,%rsp
+   0x0000000000401460 <+4>:     mov    %rsi,%rdx
+   0x0000000000401463 <+7>:     lea    0x4(%rsi),%rcx
+   0x0000000000401467 <+11>:    lea    0x14(%rsi),%rax
+   0x000000000040146b <+15>:    mov    %rax,0x8(%rsp)
+   0x0000000000401470 <+20>:    lea    0x10(%rsi),%rax
+   0x0000000000401474 <+24>:    mov    %rax,(%rsp)
+   0x0000000000401478 <+28>:    lea    0xc(%rsi),%r9
+   0x000000000040147c <+32>:    lea    0x8(%rsi),%r8
+   0x0000000000401480 <+36>:    mov    $0x4025c3,%esi
+   0x0000000000401485 <+41>:    mov    $0x0,%eax
+   0x000000000040148a <+46>:    callq  0x400bf0 <__isoc99_sscanf@plt>
+   0x000000000040148f <+51>:    cmp    $0x5,%eax
+   0x0000000000401492 <+54>:    jg     0x401499 <read_six_numbers+61>
+   0x0000000000401494 <+56>:    callq  0x40143a <explode_bomb>
+   0x0000000000401499 <+61>:    add    $0x18,%rsp
+   0x000000000040149d <+65>:    retq   
+
+第2行，把$rsi（第2个参数）赋值给$rdx(第3个参数)，注意，$rsi也就是没有进入到<read_six_numbers>之前的$rsp;
+第3行，把0x4(%rsi)赋值给$rcx，$rsi存的是$rsp，lea指令把$rsp+0x4的地址直接给到$rcx，
+
+需要注意的是lea指令和mov指令的区别;
+mov ($rsi) $rcx是从寄存器$rsi中取出值，是一个memory的地址，再根据memory的地址拿出存储的数据给到$rcx;
+lea ($rsi) $rcx是从寄存器$rsi中取出值，是一个memory的地址，再把这个地址直接给到$rcx;
+
+<__isoc99_sscanf@plt>一共有8个参数，
+$rdi 原始的第1个参数输入;
+$rsi $0x4025c3 ， 
+    运行 x/s $0x4025c3
+    输出："%d %d %d %d %d %d"
+    可知需要读取6个数字，且每个数字之间用空格分开
+$rdx $rsi
+$rcx $rsi + 0x4
+$r8  $rsi + 0x8
+$r9  $rsi + 0xc
+注意：第7个和第8个参数，没有固定的寄存器进行存放，所以直接push到栈底
+$rsp
+$rsp + 0x8
+
+<__isoc99_sscanf@plt>做的就是，把字符串按照"%d %d %d %d %d %d"的格式读取，依次读取到$rsp， $rsp + 0x8， $rsi， $rsi + 0x4， $rsi + 0x8， $rsi + 0xc
+而$rsi保存的是之前的$rsp，也就是当前的$rsp + 0x18，这样的话，在<read_six_numbers>函数结束后，<phase_2>可以直接通过$rsp来访问读取到的数字
+
+再来看<read_six_numbers>之后的部分
+   0x0000000000400f0a <+14>:    cmpl   $0x1,(%rsp)
+   0x0000000000400f0e <+18>:    je     0x400f30 <phase_2+52>
+   0x0000000000400f10 <+20>:    callq  0x40143a <explode_bomb>
+   0x0000000000400f15 <+25>:    jmp    0x400f30 <phase_2+52>
+   0x0000000000400f17 <+27>:    mov    -0x4(%rbx),%eax
+   0x0000000000400f1a <+30>:    add    %eax,%eax
+   0x0000000000400f1c <+32>:    cmp    %eax,(%rbx)
+   0x0000000000400f1e <+34>:    je     0x400f25 <phase_2+41>
+   0x0000000000400f20 <+36>:    callq  0x40143a <explode_bomb>
+   0x0000000000400f25 <+41>:    add    $0x4,%rbx
+   0x0000000000400f29 <+45>:    cmp    %rbp,%rbx
+   0x0000000000400f2c <+48>:    jne    0x400f17 <phase_2+27>
+   0x0000000000400f2e <+50>:    jmp    0x400f3c <phase_2+64>
+   0x0000000000400f30 <+52>:    lea    0x4(%rsp),%rbx
+   0x0000000000400f35 <+57>:    lea    0x18(%rsp),%rbp
+   0x0000000000400f3a <+62>:    jmp    0x400f17 <phase_2+27>
+   0x0000000000400f3c <+64>:    add    $0x28,%rsp
+   0x0000000000400f40 <+68>:    pop    %rbx
+   0x0000000000400f41 <+69>:    pop    %rbp
+   0x0000000000400f42 <+70>:    retq   
+
+<+14>判断$rsp是否为1,是的话跳转到<phase_2+52>
+<+52>把$rsp + 4的值给到$rbx
+<+57>把$rsp + 0x18的值给到$rbp，跳转到<+27>
+<+27>把$rbx - 0x4的值，也就是前一个数给到$eax，并double一下，判断$eax与$rbx的值是否相等，如果否就爆炸
+<+41>$rbx + 4，即取后面一个数，判断$rbp是否等于$rbx，即判断是否到了6个数的末尾，如果没有到最后一个数的话，回到<+27>
+依此循环，后一个数必须是前一个数的两倍，且第1个数为1,所以答案为1 2 4 8 16 32
+
+//phase_3
+disas phase_3
+<+24> 同phase2里的<read_six_number>类似，从第1个参数$rdi中读取数，分别写入到$rsp+0xc和$rsp+0x8中
+<+29> 读取数的个数写入到$rax中，判断$rax是否大于1,即至少为2，否则炸弹爆炸;
+<+39> 判断$rsp+0x8，即读取的第1个数是否比7大,若大于7,则爆炸;
+<+46> 把$rsp+8的值给到$eax,即第1个数;
+<+50> p/x *0x402470, 为0x400f7c,可以观察到，$rax代表来跳转的长度，在跳转之后，会对$rax进行一些赋值操作，最后都会跳转到<+123>
+<+123> 比较当前$rax的值与$rsp + 0xc的值，如果不相等，就爆炸;
+所以当$eax为2,也就是第1个数为2时，跳转到0x0000000000400f83，$eax等于$0x2c3,根据之前的分析，第2个数为0x2c3，所以答案为2 707
+
+//phase_4
+<+24>同理，读取2个数到$rsp+0xc和$rsp+0x8中,我们记为num1和num2
+<+29> 判断是否读取了2个，如果不是的话，引爆炸弹
+<+34> 比较第1个数与$0xe,若第1个数小于或等于0xe，跳转，否则爆炸;
+<+46> 第1个参数为$rsp + 0x8, 即第1个数num1，第2个参数为0x0，第3个参数为0xe;
+
+下面我们来看<func4>做了些什么
+disas func4
+<+4> $eax = $edx = 0xe;
+<+6> $eax = $eax - $esi = 0xe;
+<+8> $ecx = $eax = 0xe;
+<+10> $ecx = $ecx >> 0x1f = 0;
+<+13> $eax = $eax + $ecx = 0xe;
+<+15> $eax = $eax >> 1 = 7;
+<+17> $ecx = $rax + $rsi = 7;
+<+20> if 7 <= $edi, 
+        <36> $eax = 0;
+        <41> if 7 >= $edi
+            <57> 返回 $eax
+        else
+            $esi = $rcx + 1
+
+由此我们可以得出递归函数func4的c代码形式：
+// initial value: $rsp + 8, 0x0, 0xe
+int func4(int rdi, int rsi, int rdx) {
+    // return eax
+    eax = ((edx - esi) + (edx - esi) >> 0x1f) >> 1;
+    ecx = eax + esi;
+    if (edi < ecx) {
+        return 2 * func4(rdi, rsi, edx - 1);
+    }
+    else if (edi > ecx) {
+        return 2 * func4(rdi, rsi, edx + 1) + 1;
+    }
+    else
+        return 0;
+}
+
+很容易得到要想$eax为0,需要$rdi 为7, 也就是num1为7
+跳回到<phase_4+69> 比较$rsp + 0xc 与0,如果不相等就爆炸，所以num2为0
+
+//phase_5
+disas phase_5
+<+22> xor把$eax置为0
+<+24> 我们去看看<string_lenght> 这个函数做了什么
+
+disas string_lenght
+首先我们要理解一个概念（我就是这里一开始没想明白导致卡了很久）
+string或者char[] 本质就是一个指向首字母的指针，而每个char类型的大小是1个byte，所以把这个指针+1时，获得的就是指向下一个char的指针
+<+0> 比较$rdi与0x0，如果相等,$eax = 0，return
+$rdx = $edi;
+$rdx += 1;
+$eax = $edx;
+$eax = $eax - $edi;
+比较$rdx 和0x0,若不等，跳转到<+8>
+
+我们可以写出c代码形式：
+int string_lenght(char[] rdi) {
+    if (rdi == null) {
+        return 0;
+    }
+    char *edx = rdi;
+    while (edx != null) {
+        edx += 1;
+        int eax = edx - edi;
+    }
+    return eax;
+}
+可知该函数的功能就是获取一个string的长度
+
+回到phase_5
+<+29> 判断string的长度是否为6,若不为6,爆炸;若为6,跳转到<+112>
+<+112> eax = 0,跳转<+41>
+<+41> 把$rbx + $rax的最低8位给到$ecx，其他8位填0
+<+48> rdx = ecx的低8位
+<+52> edx = edx & 0xf,只取最低4bits;
+<+55> edx = （edx + 0x4024b0）的低8位, x/s 0x4024b0可得
+"maduiersnfotvbylSo you think you can stop the bomb with ctrl-c, do you?"
+<+62> $rsp + $rax + 0x10 = $edx的低8位
+<+66> $rax +1,循环直至rax = 6;
+写出这部分的c代码：
+string s = "maduiersnfotvbylSo you think you can stop the bomb with ctrl-c, do you?";
+for (int rax = 0; rax < 6; rax++) {
+    char rcx = ch[rax];
+    rdx = ecx & 0xf; //取ASCII码的后4位
+    rdx = s[rdx]
+    rsp[16+rax] = rdx;
+}
+
+<+76> rsp + 0x16 为0,相当于从$rsp + 0x10 到$rsp + 0x15 一共写入来6个char，并把最后一位的下一位$rsp + 0x16置为0,也就是null
+<+81> esi = $0x40245e，判断$rsp + 0x10开始的string是否等于esi，不相等就爆炸， x/s 0x40245e, 得到“flyers"
+
+分析：输入的ch，经过循环的转换之后，得到最后的输出为”flyers"
+要想得到f，则ASCII码的后4位为9,依此类推，输入的ch的每个字符，后4位的ASCII码分别为9, 15, 14, 5, 6, 7
+a的后4位是0001,也就是1,依此往后可得，ionefg
+答案：ionefg
+
+//phase_6
+disas phase_6
+
+*part1
+<+18>同理读取6个数到$rsp栈底，依此往上排列
+<+35> eax = r13 = rsp;
+<+39> eax = eax - 1;
+<+42> 如果eax <= 0x5,跳转，否则爆炸
+<+52> r12 = r12 + 1
+<+56> if (r12 != 6) 
+         ebx = r12;
+         rax =  ebx;
+         rax = rasp + 4 * rax;
+         if (rax != rbp)
+            ebx += 1;
+            if (ebx > 5)
+
+仔细理解从<+23> 到<+95>部分,可以写出c代码：
+for (int r12 = 0; r12 < 6; r12 ++) {
+    rbp = rsp[r12];
+    eax = rsp[r12];
+    eax -= 1;
+    if (rax > 5) bomb;
+    for (int ebx = r12 + 1; ebx < 6; ebx++) {
+        eax = rsp[ebx];
+        if (eax == rbp) bomb;
+    }
+}
+这部分代码的主要目的，是检测输入的6个数，每个均小于6,且每个数均不相等
+
+*part2
+<+95> rsi = rsp + 0x18;
+<+100> rax = rsp;
+<+103> ecx = 7;
+<+108> edx = ecx = 7;
+<+110> edx = edx - eax;
+<+112> eax = edx;
+<+114> rax += 4;
+<+118> if rax != rsi, jmp
+
+这段的c代码如下:
+for (int i = 0; i < 6; i++) {
+    rsp[i] = 7 - rsp[i];
+}
+
+*part3
+<+163> ecx = &(rsp + rsi);
+<+166> if (ecx <= 1)
+            <+143>edx = 0x6032d0
+            <+148> rsp +2 * rsi + 0x20 = rdx;
+            <+153> rsi +=4
+            <+157> if (rsi != 0x18) 
+                ecx = rsp + rsi;
+                if (ecx < = 1)
+                    jmp<+143>
+                else
+                    eax = 1;
+                    edx = 0x6032d0;
+                    jmp<+130>
+
+要理解这个part的disas code，关键在于理解$0x6032d0到底是个什么东西（我在这卡了很久）。
+可以把它理解成一个指向一个node的指针p，而p+0x8，存储了指向下一个node的指针，
+<+130>:   mov    0x8(%rdx),%rdx
+可以理解为 Node* p; p = p->next;
+
+理解了这个之后，就可以写出c代码：
+//Node *root = $0x6032d0
+for (int rsi = 0; rsi < 24; rsi + 4) {
+    ecx = rsp[rsi];
+    if (ecx > 1) {
+        eax = 1;
+        edx = root;
+        while (eax != ecx) {
+            edx = edx->next;
+            eax += 1;
+        }
+    }
+    rsp[0x20 + 2 *rsi] = edx;
+}
+
+这部分代码的作用是，对于6个数，从num1到num6，把root后移动（num_k - 1)之后的节点存放在rsp[0x20 + k * 8]处
+
+*part4
+<+183> - <+222>
+while (rax != NULL) {
+    rsp[i]->next = rsp[i+1];
+}
+这一段很简单，把存在栈里的node的next关系重新建立一下
+
+*part5
+<+183> rbx = rsp + 0x20;
+<+188> rax = rsp + 0x28;
+<+193> rsi = rsp + 0x50;
+rcx = rbx;
+rdx = &rax;
+rcx + 8 = rdx;
+rax += 8;
+if (rax == rsi) {
+    rdx + 0x8 = 0;
+    for (int ebp = 5; ebp > 0; ebp - 1) {
+        rax = rbx->next;
+        rax = rax->val;
+        if (rbx->val < rax) bomb;
+        rbx = rbx->next;
+    }
+}
+要求按照val顺序从大到小排列,6个node的值分别为332,168,924,691,477,443
+顺序为3,4,5,6,1,2
+所以最终答案为4,3,2,1,6,5
