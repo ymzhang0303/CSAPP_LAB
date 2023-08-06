@@ -329,3 +329,50 @@ if (rax == rsi) {
 要求按照val顺序从大到小排列,6个node的值分别为332,168,924,691,477,443
 顺序为3,4,5,6,1,2
 所以最终答案为4,3,2,1,6,5
+
+//secret phase
+有彩蛋！在bomb.c的结尾
+    /* Wow, they got it!  But isn't something... missing?  Perhaps
+     * something they overlooked?  Mua ha ha ha ha! */
+
+dias phase_defused
+<+44> x/s 0x402619 
+"%d %d %s" 
+可知要想不跳过<+108><secret_phase> 需要输入3个输入，分别为int,int,string，目前满足的只有phase_3 和phase_4
+<+49> x 0x603870
+"7 0 DrEvil"
+"7 0 "正是phase_4的答案
+<+64> x/s 0x402622
+"DrEvil"
+可知第3个输入，string就是"DrEvil"
+所以要想出发secret phase，就需要在phase_4的input改为"7 0 DrEvil"
+
+disas secret_phase
+先来看开<fun7>做了些什么
+disas fun7
+int fun7(Node* rdi, int rsi) {
+    if (rdi->val == rsi) {
+        eax = 0;
+        return eax;
+    }
+    else if (rdi->val < rsi) {
+        return 2 * fun7(rdi->right, rsi) + 1;
+    }
+    else {
+        return 2 * fun7(rdi->left, rsi);
+    }
+}
+fun7的功能是在一个二叉树里寻找到给定的target值，从而返回对应的路径长度，路径长度的计算方法为，从下网上走，若在右边，l = 2 * l + 1;
+若在左边，l = 2 * l;
+回到secret_phase
+<+54> 需要返回的值为2,则必然目标节点路径为
+   0
+  /
+ 0    
+  \  
+   0
+
+p *(0x6030f0 + 0x8)
+p *(6304016 + 0x10)
+p *6304080
+答案为22
